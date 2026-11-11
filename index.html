@@ -556,6 +556,21 @@ function back(){if($('mUser').classList.contains('show'))return;if($('mAband').c
 let toastT;function toast(s){const t=$('toast');t.textContent=s;t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),3200)}
 function busy(on,txt){$('busyTxt').textContent=txt||'LOADING';$('busy').classList.toggle('show',on)}
 function setErr(id,msg,ok){const e=$(id);e.textContent=msg||'';e.classList.toggle('ok',!!ok)}
+/* Works out WHY Firestore is unreachable and says so in plain words */
+async function fsDiag(){
+  const pid=FIREBASE_CONFIG.projectId;
+  try{
+    const r=await fetch('https://firestore.googleapis.com/v1/projects/'+pid+'/databases/(default)/documents/usernames/diagnostic_ping',{cache:'no-store'});
+    let j={};try{j=await r.json()}catch(e){}const msg=((j&&j.error&&j.error.message)||'').toLowerCase(),st=(j&&j.error&&j.error.status)||'';
+    if(r.status===404||/does not exist|not found/.test(msg)&&!/document/.test(msg))return 'Connected to Google, but project "'+pid+'" has no Firestore database named (default). In the Firebase console open Build > Firestore Database > Create database (it must be the default database), then reload.';
+    if(/has not been used|is disabled|api.*not.*enabled/.test(msg))return 'The Cloud Firestore API is switched off for project "'+pid+'". Open the Firebase console > Build > Firestore Database and create the database, then reload.';
+    if(r.status===403&&st==='PERMISSION_DENIED')return 'The database is reachable, but its security rules refused the request. In the Firebase console open Firestore > Rules, paste the contents of firestore.rules and press Publish.';
+    if(r.status===400&&/api key/.test(msg))return 'The Firebase API key or project id in index.html does not match your project.';
+    if(r.ok||r.status===404)return 'The database is reachable from this page, but the game could not connect. Try a hard refresh (Ctrl+Shift+R), turn off VPN or ad-blockers, then try again.';
+    return 'Firestore answered with an unexpected error ('+r.status+' '+st+'). '+(j&&j.error&&j.error.message||'');
+  }catch(e){return 'This network or browser is blocking Google\'s database servers (firestore.googleapis.com). Try another network such as phone data or home Wi-Fi, turn off ad-blockers or VPNs, and make sure this site is not restricted.'}
+}
+const fsDown=e=>e&&(e.code==='unavailable'||e.code==='failed-precondition'||/offline|Could not reach Cloud Firestore/i.test(e.message||''));
 const friendly=e=>{
   const c=(e&&e.code)||'';
   const m={'auth/email-already-in-use':'That email already has an account. Try logging in.','auth/invalid-email':'That email address looks invalid.',
@@ -644,7 +659,7 @@ async function onAuth(u){
     if(!profile){busy(false);updateChip();open('mUser');setTimeout(()=>$('uName').focus(),60);return}
     busy(false);updateChip();refresh();
     if($('mAuth').classList.contains('show')||$('mUser').classList.contains('show')){closeAll();toast('Welcome, '+profile.username)}
-  }catch(e){busy(false);console.error(e);ready=true;toast(friendly(e));updateChip()}
+  }catch(e){busy(false);console.error(e);ready=true;toast(friendly(e));updateChip();if(fsDown(e))fsDiag().then(m=>{setErr('aErr',m);toast(m)})}
 }
 function updateChip(){
   const on=!!(user&&profile);
@@ -743,7 +758,7 @@ $('authForm').addEventListener('submit',async e=>{
       busy(true,'SIGNING IN');
       await A.signInWithEmailAndPassword(auth,email,pass);
     }
-  }catch(err){busy(false);console.error(err);setErr('aErr',friendly(err))}
+  }catch(err){busy(false);console.error(err);setErr('aErr',friendly(err));if(fsDown(err)){setErr('aErr','Checking the connection...');fsDiag().then(m=>setErr('aErr',m))}}
   finally{$('aSubmit').disabled=false;busy(false)}
 });
 $('aForgot').onclick=async()=>{
