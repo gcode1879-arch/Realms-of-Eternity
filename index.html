@@ -344,7 +344,7 @@
     <button class="btn" id="bCont" hidden>Continue</button>
     <button class="btn" id="bSet">Settings</button>
     <button class="btn" id="bCred">Credits</button>
-    <button class="btn" id="bTest" style="display:none">Test Mode</button>
+    <button class="btn" id="bTest">Play as Guest</button>
     <button class="btn" id="bExit">Exit Game</button>
   </nav>
 </div>
@@ -362,7 +362,9 @@
       <div class="err" id="aErr"></div>
       <button class="btn" type="submit" id="aSubmit">Log In</button>
       <button type="button" class="link" id="aForgot">Forgot password?</button>
-      <button type="button" class="link" id="aTest" style="display:none">Skip sign-in: play in Test Mode</button>
+      <div class="msg" style="font-size:13px;margin:10px 0 6px;color:#ffb4a8;line-height:1.4">Email sign-in is not working right now. You can still play as a guest.</div>
+      <button type="button" class="btn" id="aTest">Play as Guest</button>
+      <div class="msg" style="font-size:11.5px;margin-top:6px;color:#bdb394;line-height:1.4">Guest progress is saved on this device and browser only. It stays until you clear this site's data, so do not clear it.</div>
     </form>
   <p class="msg" style="font-size:12px;margin-top:14px;color:#bdb394">Your hero, items, achievements and currencies are saved on the server, so they follow you to any device.</p>
   <button class="btn" data-close style="max-width:220px;margin-left:auto;margin-right:auto">Back</button>
@@ -541,7 +543,7 @@ const USER_RE=/^[a-z0-9_]{3,16}$/;
 /* ---------- Local-only settings (device preferences, not game progress) ---------- */
 const KEY_SET='roe_settings';
 const lget=k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}};
-const lset=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+let gmT=0;const lset=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}if(typeof gmSave==='function'&&/^roe_test/.test(k)){clearTimeout(gmT);gmT=setTimeout(gmSave,250)}};
 let settings=Object.assign({music:70,sfx:80,particles:true,dragons:true,reduced:false,voice:true},lget(KEY_SET)||{});
 if(matchMedia('(prefers-reduced-motion: reduce)').matches && !lget(KEY_SET)) settings.reduced=true;
 const saveSettings=()=>lset(KEY_SET,settings);
@@ -601,16 +603,17 @@ async function initFirebase(){
   try{
     // Load Firebase's "compat" builds as ordinary scripts. They share one global, so there are no
     // duplicate-instance problems, and we can fall back to other CDNs if one is blocked.
-    const loadScript=u=>new Promise((res,rej)=>{const s=document.createElement('script');s.src=u;s.onload=res;s.onerror=()=>rej(new Error('failed '+u));document.head.appendChild(s)});
-    const BASES=[FB_BASE,'https://cdn.jsdelivr.net/npm/firebase@'+FB_VER+'/','https://unpkg.com/firebase@'+FB_VER+'/'];
+    const loadScript=u=>new Promise((res,rej)=>{const s=document.createElement('script');const to=setTimeout(()=>{s.remove();rej(new Error('timed out '+u))},9000);s.src=u;s.onload=()=>{clearTimeout(to);res()};s.onerror=()=>{clearTimeout(to);s.remove();rej(new Error('failed '+u))};document.head.appendChild(s)});
+    let BASES=['https://cdn.jsdelivr.net/npm/firebase@'+FB_VER+'/','https://unpkg.com/firebase@'+FB_VER+'/',FB_BASE];   /* gstatic last: many school networks block it */
+    const good=lget('roe_fbbase');if(good&&BASES.includes(good))BASES=[good].concat(BASES.filter(x=>x!==good));   /* try the source that worked last time first */
     let loaded=false,lastErr=null;
     for(const b of BASES){
       try{
         if(!window.firebase)await loadScript(b+'firebase-app-compat.js');
         if(!firebase.auth)await loadScript(b+'firebase-auth-compat.js');
         if(!firebase.firestore)await loadScript(b+'firebase-firestore-compat.js');
-        loaded=true;fbBase=b;loadScriptG=loadScript;break;
-      }catch(e){lastErr=e;console.warn('Firebase failed to load from',b,e)}
+        loaded=true;fbBase=b;loadScriptG=loadScript;lset('roe_fbbase',b);break;
+      }catch(e){lastErr=e;console.info('Firebase source unavailable, trying the next one:',b)}
     }
     if(!loaded)throw lastErr;
     const app=firebase.initializeApp(FIREBASE_CONFIG);
@@ -668,7 +671,7 @@ function updateChip(){
   if(on){
     const n=profile.username;
     $('acctName').textContent=n;
-    $('acctSub').textContent=(testMode?'Test mode · ':'')+(chars.length?(chars.length+' / 5 heroes'):'No heroes yet');
+    $('acctSub').textContent=(testMode?'Guest · ':'')+(chars.length?(chars.length+' / 5 heroes'):'No heroes yet');
     ini.textContent=n.charAt(0).toUpperCase();
     let h=0;for(const ch of n)h=(h*31+ch.charCodeAt(0))%360;
     av.style.background='linear-gradient(135deg,hsl('+h+',55%,42%),hsl('+((h+50)%360)+',60%,22%))';
@@ -679,17 +682,35 @@ function updateChip(){
     $('acctSub').textContent='';
     ini.textContent='?';av.style.background='#2a2644';img.hidden=true;
   }
-  $('acctBtn').textContent=on?(testMode?'Exit Test':'Log Out'):'Log In';
+  $('acctBtn').textContent=on?(testMode?'Leave Guest':'Log Out'):'Log In';
 }
 function refresh(){$('bCont').hidden=!user;updateChip()}
 async function logout(){
   WORLD=null;worlds=[];
-  if(testMode){testMode=false;user=null;profile=null;chars=[];sel=null;closeAll();updateChip();refresh();toast('Left test mode');return}
+  if(testMode){testMode=false;user=null;profile=null;chars=[];sel=null;closeAll();updateChip();refresh();toast('Left guest mode. Your guest progress is still saved on this device.');return}
   if(auth){await A.signOut(auth)}closeAll();toast('Logged out')}
-function startTest(){
-  if(user&&profile&&!testMode){toast('You are already signed in. Log out to use test mode.');return}
-  testMode=true;user={uid:'test',photoURL:null,test:true};profile={username:'Tester',currencies:{gold:25,gems:0},inventory:{},achievements:{}};ready=true;busy(false);
-  (async()=>{chars=[];updateChip();refresh();closeAll();toast('Test Mode: no account needed. Worlds and heroes are saved only in this browser.');openWorlds()})();
+/* ---------- Guest safety net: a second copy of guest saves in IndexedDB (browsers flush localStorage late and can lose it) ---------- */
+const GM={db:null,ready:null,last:''};
+function gmOpen(){return new Promise(res=>{try{const r=indexedDB.open('roe_mirror',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>res(null);r.onblocked=()=>res(null)}catch(e){res(null)}})}
+function gmSnap(){const o={};try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(/^roe_(test|tut|cine|inn|pm|lobby)|^roe_settings$/.test(k)||k.indexOf('@')>0&&k.startsWith('roe_'))o[k]=localStorage.getItem(k)}}catch(e){}return o}
+async function gmSave(){
+  if(!localStorage.getItem('roe_test_worlds'))return;const db=GM.db||(GM.db=await gmOpen());if(!db)return;
+  const snap=JSON.stringify(gmSnap());if(snap===GM.last)return;
+  try{await new Promise((res,rej)=>{const t=db.transaction('kv','readwrite');t.objectStore('kv').put({ts:Date.now(),d:snap},'all');t.oncomplete=res;t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error)});GM.last=snap}catch(e){console.info('mirror save skipped',e)}
+}
+async function gmRestore(){
+  try{if(localStorage.getItem('roe_test_worlds'))return;const db=GM.db=await gmOpen();if(!db)return;
+    const rec=await new Promise(res=>{const r=db.transaction('kv').objectStore('kv').get('all');r.onsuccess=()=>res(r.result);r.onerror=()=>res(null)});
+    if(!rec||!rec.d)return;const o=JSON.parse(rec.d);if(!o.roe_test_worlds)return;
+    Object.keys(o).forEach(k=>{if(localStorage.getItem(k)===null)localStorage.setItem(k,o[k])});console.info('Guest saves restored from the backup copy')}catch(e){console.info('mirror restore skipped',e)}
+}
+GM.ready=gmRestore();
+setInterval(gmSave,4000);addEventListener('pagehide',gmSave);document.addEventListener('visibilitychange',()=>{if(document.hidden)gmSave()});
+async function startTest(){
+  if(user&&profile&&!testMode){toast('You are already signed in. Log out to play as a guest.');return}
+  try{await GM.ready}catch(e){}
+  testMode=true;user={uid:'test',photoURL:null,test:true};profile={username:'Guest',currencies:{gold:25,gems:0},inventory:{},achievements:{}};ready=true;busy(false);
+  (async()=>{chars=[];updateChip();refresh();closeAll();toast('Guest mode: your heroes and worlds are saved on this device and browser.');openWorlds()})();
 }
 
 /* Claim a unique username and create the server profile atomically */
@@ -6411,7 +6432,7 @@ async function netStart(){
     r.ref(NET.base+'/pos').on('value',s=>{const v=s.val()||{};NET.peers={};Object.keys(v).forEach(k=>{if(k!==user.uid&&Date.now()-(v[k].t||0)<30000)NET.peers[k]=v[k]})});
     r.ref(NET.base+'/chat').orderByChild('ts').limitToLast(1).on('child_added',s=>{const m=s.val();if(!m||m.u===user.uid||m.ts<NET.t0-2000)return;
       if(WS.map&&m.m===WS.map.id&&Math.hypot((m.x||0)-WS.px,(m.y||0)-WS.py)<1400)chatAdd(String(m.n||'Adventurer').slice(0,16),cfMask(String(m.t||'').slice(0,120)),'o','w')});
-  }catch(e){console.warn('net',e)}finally{NET.busy=0}
+  }catch(e){console.info('net',e)}finally{NET.busy=0}
 }
 function netPub(dt){
   if(!NET.on||!WS.map)return;NET.pub-=dt;if(NET.pub>0)return;NET.pub=.6;
@@ -6452,7 +6473,7 @@ async function vcStart(){
     VC.src.connect(VC.delay);VC.delay.connect(VC.gate);VC.gate.connect(VC.dest);VC.an=c.createAnalyser();VC.an.fftSize=256;VC.src.connect(VC.an);
     VC.on=1;VC.guardOk=false;vcStartSR();vcSetStatus('On. The speech guard is starting');
     if(!testMode&&user&&NET.on){VC.sigRef=NET.db.ref(NET.base+'/voice/'+user.uid);VC.sigRef.on('child_added',s=>{const m=s.val();s.ref.remove();if(m)vcSignal(m)})}
-  }catch(e){console.warn(e);VC.on=0;toast('Could not open the microphone.');vcSetStatus('Off')}
+  }catch(e){console.info(e);VC.on=0;toast('Could not open the microphone.');vcSetStatus('Off')}
 }
 function vcStop(){
   VC.on=0;try{if(VC.sr){const r=VC.sr;VC.sr=null;r.stop()}}catch(e){}
@@ -6478,7 +6499,7 @@ async function vcSignal(m){
     if(m.k==='offer'){if(VC.pcs[id])vcClose(id);const p=vcMake(id);await p.pc.setRemoteDescription(JSON.parse(m.d));const a=await p.pc.createAnswer();await p.pc.setLocalDescription(a);vcSend(id,{k:'answer',d:JSON.stringify(a)})}
     else if(m.k==='answer'&&VC.pcs[id])await VC.pcs[id].pc.setRemoteDescription(JSON.parse(m.d));
     else if(m.k==='ice'&&VC.pcs[id])await VC.pcs[id].pc.addIceCandidate(JSON.parse(m.d));
-  }catch(e){console.warn('voice signal',e)}
+  }catch(e){console.info('voice signal',e)}
 }
 async function vcCall(id){const p=vcMake(id);const o=await p.pc.createOffer();await p.pc.setLocalDescription(o);vcSend(id,{k:'offer',d:JSON.stringify(o)})}
 const vcLevel=a=>{const b=new Uint8Array(a.fftSize);a.getByteTimeDomainData(b);let m=0;for(let i=0;i<b.length;i++)m=Math.max(m,Math.abs(b[i]-128));return m};
@@ -6501,7 +6522,7 @@ function vcReport(id){const q=NET.peers[id];if(!q||!NET.on)return;NET.db.ref(NET
 function openVoice(){
   shopCss();const sup=vcSupported(),near=Object.keys(NET.peers).filter(id=>WS.map&&NET.peers[id].m===WS.map.id&&Math.hypot(NET.peers[id].x-WS.px,NET.peers[id].y-WS.py)<VC.R*1.2);
   let h='<div class="shl" style="color:#ffe9a8"><b>Proximity voice.</b> You only hear players within about '+VC.R+' paces, and they fade with distance. Past that range they cannot hear you. A speech guard mutes anyone using curse words or slurs.</div>';
-  h+='<div class="svr"><div class="svi"><b>Microphone</b><small>Status: '+esc(VC.status)+(VC.on?(VC.guardOk?' · guard active':' · guard offline, mic held closed'):'')+(sup?'':' · not supported in this browser')+(testMode?' · test mode has no other players':'')+'</small></div><button type="button" id="vcT"'+(sup||VC.on?'':' disabled')+'>'+(VC.on?'Turn off':'Turn on')+'</button></div>';
+  h+='<div class="svr"><div class="svi"><b>Microphone</b><small>Status: '+esc(VC.status)+(VC.on?(VC.guardOk?' · guard active':' · guard offline, mic held closed'):'')+(sup?'':' · not supported in this browser')+(testMode?' · guest mode has no online players':'')+'</small></div><button type="button" id="vcT"'+(sup||VC.on?'':' disabled')+'>'+(VC.on?'Turn off':'Turn on')+'</button></div>';
   h+='<h4>Nearby voices</h4>';
   if(!VC.on)h+='<div class="shl" style="opacity:.7">Turn the microphone on to talk and hear nearby players.</div>';
   else if(!near.length)h+='<div class="shl" style="opacity:.7">No one is close enough to hear.</div>';
@@ -6601,12 +6622,12 @@ async function svPull(){
     const loc=svParse((()=>{try{return localStorage.getItem(svKeys().k)}catch(e){return null}})());
     if(c&&(!loc||(c.ts||0)>(loc.ts||0)+3000)){TF=c.f;TBAG=c.bag;SV.hash='';SV.loaded=true;svWriteLocal();toast('Progress restored from your cloud save.')}
     SV.pulled=true;SV.cloudHash=c?svSum(JSON.stringify({v:c.v,ts:c.ts,f:c.f,bag:c.bag})):'';
-  }catch(e){console.warn('cloud pull',e)}finally{SV.pulling=false}
+  }catch(e){console.info('cloud pull',e)}finally{SV.pulling=false}
 }
 async function svPush(){
   if(!svCloudOn()||!SV.pulled||!SV.loaded)return 'skip';
   const p=svPack();if(p.b.length>900000)return 'big';
-  try{await svDoc().set({b:p.b,s:p.s,ts:Date.now(),v:2});SV.cloudAt=Date.now();SV.cloudHash=p.s;return 'ok'}catch(e){console.warn('cloud save',e);return 'fail'}
+  try{await svDoc().set({b:p.b,s:p.s,ts:Date.now(),v:2});SV.cloudAt=Date.now();SV.cloudHash=p.s;return 'ok'}catch(e){console.info('cloud save',e);return 'fail'}
 }
 /* ---- public save calls ---- */
 function tsave(){if(!SV.loaded)return;svWriteLocal()}
@@ -7668,7 +7689,7 @@ async function ensureRtdb(){
   if(rtdb)return rtdb;
   if(!FIREBASE_CONFIG.databaseURL||!fbBase)return null;
   try{if(!firebase.database)await loadScriptG(fbBase+'firebase-database-compat.js');rtdb=firebase.database();return rtdb}
-  catch(e){console.warn('Realtime Database unavailable',e);return null}
+  catch(e){console.info('Realtime Database unavailable',e);return null}
 }
 function lobbyMine(){const c=lobbyChar;return{name:c.name,heroClass:c.heroClass,race:c.race||'human',level:+c.level||1,ready:myReady,t:(rtdb&&!localLobby)?firebase.database.ServerValue.TIMESTAMP:Date.now()}}
 function allReady(){const a=Object.keys(lobbyPlayers).map(k=>lobbyPlayers[k]);return a.length>0&&a.every(p=>p&&p.ready)&&!!(user&&lobbyPlayers[user.uid]&&lobbyPlayers[user.uid].ready)}
@@ -7875,8 +7896,8 @@ window.__roeWorlds={WAPI,get WORLD(){return WORLD},openWorlds,enterWorldSlot,tRe
 /* ---------- Menu ---------- */
 $('bNew').onclick=()=>{if(!(user&&profile)){showAuth('create');return}openWorlds()};
 $('bCont').onclick=()=>{if(!(user&&profile))return showAuth('login');openWorlds()};
-$('bTest').onclick=startTest;$('aTest').onclick=startTest;/* test mode is a hidden developer switch: only reachable with ?dev=1 */
-if(/[?&]dev=1\b/.test(location.search)){$('bTest').style.display='';$('aTest').style.display=''}else{$('bTest').remove();$('aTest').remove()}
+$('bTest').onclick=startTest;$('aTest').onclick=startTest;/* guest mode: keep saves from being evicted by the browser */
+try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
 $('bSet').onclick=()=>open('mSet');
 $('bCred').onclick=()=>open('mCred');
 $('bExit').onclick=()=>open('mExit');
